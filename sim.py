@@ -31,21 +31,20 @@ ifaces = []
 cur_iface = None
 cur_iface_time = 0
 
-
 def selectIface(bw_up,bw_down):
     global ifaces,cur_iface,cur_iface_time
     #Use predictor, go up fast
-    bw_up *= 1+float(cfg.PREDICTOR)/100
-    bw_down *= 1+float(cfg.PREDICTOR)/100
+    bw_up *= 1+cfg.PREDICTOR/100.0
+    bw_down *= 1+cfg.PREDICTOR/100.0
     #Keep because of hysteresis?
-    bw_needed = max(bw_up,bw_down)
+    bw_needed = max(bw_up,bw_down) #TODO: This assumes symmetric up/down
     if cur_iface:
-        if bw_needed < cur_iface.bwrange[1] and (bw_needed > cur_iface.bwrange[0]*float(cfg.HYSTERESIS)/100 or cur_iface_time < float(cfg.KEEPTIME)):
-            if (bw_needed > cur_iface.bwrange[0]):
+        #Check for keep time and hysteresis
+        if bw_needed < max(cur_iface.bwrange) and (bw_needed > min(cur_iface.bwrange)*cfg.HYSTERESIS/100.0 or cur_iface_time < float(cfg.KEEPTIME)):
+            #Reset cooldown timer if we need this interface!
+            if bw_needed > min(cur_iface.bwrange):
                 cur_iface_time = 0
             return cur_iface
-    p_min = -1
-    p_min_i = None
 
     cur_iface = min(ifaces,key=lambda x: x.getPower(bw_up,bw_down) or float("inf"))
     cur_iface_time = 0
