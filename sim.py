@@ -51,13 +51,13 @@ def selectIface(bw_up,bw_down):
     return cur_iface
 
 class Interface:
-    def __init__(self, name, bandwidth, latency, touse, profile, rounded):
+    def __init__(self, name):
         self.ifname = name;
-        self.bw = (float(bandwidth));
-        self.uplatency = latency;
-        self.bwrange = touse;
-        self.profile = profile;
-        self.rounded = rounded;
+        self.bw = float(eval('cfg.%s_BW' % (name)))
+        self.uplatency = eval('cfg.%s_LATENCY' %(name))
+        self.bwrange = eval('cfg.%s_RANGE' %(name))
+        self.profile = eval('cfg.%s_PROFILE' %(name))
+        self.rounded = eval('cfg.%s_ROUND' % (name))
         start = 0
         start_2 = 0
         end = 0
@@ -80,8 +80,8 @@ class Interface:
         return "iface: (%s) @ %s MBit/s\nLatency: %s ms\nUse in range: %s MBit/s - %s MBit/s\nProfile: %s\n" % (self.ifname,self.bw,self.uplatency,self.bwrange[0],self.bwrange[1],len(self.profile))
 
     def getPower(self,bw_up,bw_down):
-        power = -1
         #nested lists
+        power = None
         for p in sorted(self.profile.keys()):
             if float(p[0]) <= bw_down < float(p[1]):
                 for q in sorted(self.profile[p]):
@@ -89,15 +89,11 @@ class Interface:
                         power = float(q[2])
                         break
                 break
-
-        if power == -1:
-            if max(bw_up,bw_down) <= self.bw:
-                return self.rounded
-            else:
-                return None
-        else:
+        if power:
             return power
-
+        if max(bw_up,bw_down) <= self.bw:
+            return self.rounded
+        return None
 
     def getMaxBW(self):
         return float(self.bw)
@@ -107,11 +103,9 @@ class Interface:
 
 
 print("Reading Interfaces:\n================================");
-for i in cfg.INTERFACES:
+ifaces = [ Interface(i) for i in cfg.INTERFACES ]
+for i in ifaces:
     print(i)
-    iface = Interface(i,eval('cfg.%s_BW' % (i)),eval('cfg.%s_LATENCY' %(i)),eval('cfg.%s_RANGE' %(i)),eval('cfg.%s_PROFILE' %(i)),eval('cfg.%s_ROUND' % (i)))
-    print(iface)
-    ifaces.append(iface)
 print("===== DONE =====\n");
 print("ebond timestep = %s s" % (cfg.INTERVAL))
 print("Hysteresis = %s %% of max BW " % (cfg.HYSTERESIS))
@@ -152,7 +146,7 @@ with  open(args.bwfile,'rt') as csvfile:
             break
         line += 1
         #number of steps to take before the next possible interface change
-        #we always take at least one step
+        #we always take at least one step, step = bandwidth log interval
         steps = max(1,math.floor((float(row[0])-float(last_row[0]))/float(cfg.INTERVAL)))
 
         #fast forward data and energy values ... no iface changes
@@ -228,9 +222,9 @@ with  open(args.bwfile,'rt') as csvfile:
             old_iface = iface
             iface = selectIface(float(last_row[2]),float(last_row[3])) or ifaces[0]
             if old_iface != iface:
-                still_time = float(eval('cfg.%s_LATENCY' % (old_iface.getIFace()))/1000)
+                still_time = old_iface.uplatency/1000.0
                 still_iface = old_iface
-                time_iface[old_iface.getIFace()] += float(eval('cfg.%s_LATENCY' % (old_iface.getIFace())))/1000
+                time_iface[old_iface.getIFace()] += old_iface.uplatency/1000.0
             next_step += float(cfg.INTERVAL)
 
         last_row = row
