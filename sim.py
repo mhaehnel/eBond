@@ -16,11 +16,7 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see  <http://www.gnu.org/licenses/>.
 '''
-import math
-import argparse
-import imp
-import csv
-import sys
+import math, argparse, imp, csv, sys
 
 parser = argparse.ArgumentParser(description='Simulate network load and evaluate energy consumption based on card specs')
 parser.add_argument('-c','--config',help='The eBond configuration file',required=True)
