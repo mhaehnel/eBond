@@ -99,6 +99,11 @@ class Interface:
     def getIFace(self):
         return self.ifname
 
+class DataBuffer:
+
+    def __init__(self):
+        self.send = 0
+        self.recv = 0
 
 print("Reading Interfaces:\n================================");
 ifaces = [ Interface(i) for i in cfg.INTERFACES ]
@@ -116,8 +121,8 @@ e_worst = 0
 data_total = [0,0]
 violations = 0
 violation_time = 0
-additional_mbytes_next_send = 0
-additional_mbytes_next_recv = 0
+
+dbuffer = DataBuffer()
 
 time_iface = { i.getIFace() : 0 for i in ifaces }
 
@@ -128,6 +133,7 @@ if args.outfile:
 
 still_iface = False
 still_time = 0
+
 
 with  open(args.bwfile,'rt') as csvfile:
     simreader = csv.reader(csvfile, delimiter=',', quotechar="\"");
@@ -152,13 +158,13 @@ with  open(args.bwfile,'rt') as csvfile:
         while True:
             time = float(row[0]) - float(last_row[0])
             #Can we squeeze in bytes that were too many?
-            if (additional_mbytes_next_send != 0 and float(last_row[1]) < iface.getMaxBW()):
-                send_add = min((iface.getMaxBW() - float(last_row[1]))*time,additional_mbytes_next_send)
-                additional_mbytes_next_send -= send_add
+            if (dbuffer.send != 0 and float(last_row[1]) < iface.getMaxBW()):
+                send_add = min((iface.getMaxBW() - float(last_row[1]))*time,dbuffer.send)
+                dbuffer.send -= send_add
                 last_row[1] = float(last_row[1])+send_add/time
-            if (additional_mbytes_next_recv != 0 and float(last_row[2]) < iface.getMaxBW()):
-                recv_add = min((iface.getMaxBW() - float(last_row[2]))*time,additional_mbytes_next_recv)
-                additional_mbytes_next_recv -= recv_add
+            if (dbuffer.recv != 0 and float(last_row[2]) < iface.getMaxBW()):
+                recv_add = min((iface.getMaxBW() - float(last_row[2]))*time,dbuffer.recv)
+                dbuffer.recv -= recv_add
                 last_row[2] = float(last_row[2])+recv_add/time
 
             #calculate data sent/received
@@ -170,11 +176,11 @@ with  open(args.bwfile,'rt') as csvfile:
             #and the power used for this interface
             cur_p = iface.getPower(float(last_row[1]),float(last_row[2]))
             if not cur_p:
-                additional_mbytes_next_send += max(0,time*(float(row[1]) - iface.getMaxBW()))
-                additional_mbytes_next_recv += max(0,time*(float(row[2]) - iface.getMaxBW()))
+                dbuffer.send += max(0,time*(float(row[1]) - iface.getMaxBW()))
+                dbuffer.recv += max(0,time*(float(row[2]) - iface.getMaxBW()))
                 cur_p = iface.getPower(min(iface.getMaxBW(),float(last_row[1])),min(iface.getMaxBW(),float(last_row[2])))
 
-            if (additional_mbytes_next_send > 0 or additional_mbytes_next_recv > 0):
+            if dbuffer.send > 0 or dbuffer.recv > 0:
                 violations += 1
                 is_violating = 1
                 violation_time += time
@@ -235,7 +241,7 @@ print("Interface up share: ")
 for key,value in time_iface.items():
     print("%s => %s %%" % (key, value*100/total_time))
 print("Number of service vialoations due to late power up: %s (%s seconds or %s %% of time)" %(violations,violation_time,violation_time*100/total_time))
-print("Remaining bytes to transfer: %s / %s" %(additional_mbytes_next_send,additional_mbytes_next_recv))
+print("Remaining bytes to transfer: %s / %s" %(dbuffer.send,dbuffer.recv))
 print("Transfered GByte: %s / %s / %s " % (data_total[0]/1024/8,data_total[1]/1024/8,(data_total[1]+data_total[0])/1024/8))
 print("Average Speed MByte/s: %s / %s / %s" % (data_total[0]/8/total_time,data_total[1]/8/total_time,(data_total[1]+data_total[0])/8/total_time))
 
