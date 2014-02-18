@@ -104,6 +104,31 @@ class DataBuffer:
     def __init__(self):
         self.send = 0
         self.recv = 0
+    
+    def isBuffering(self):
+        return self.send > 0 or self.recv > 0
+
+    def process(self,bw_data,time,iface):
+        spare_send = iface.getMaxBW()-bw_data[1]
+        spare_recv = iface.getMaxBW()-bw_data[2]
+        #if we send/recv more than current channel capacity: buffer
+        #if we send/recv less, empty buffer
+        if spare_send < 0:
+            bw_data[1] = iface.getMaxBW()
+            self.send += -spare_send*time
+        else:
+            bw_data[1] += min(spare_send,self.send/time)
+            self.send -= min(spare_send*time,self.send)
+
+        if spare_recv < 0:
+            bw_data[2] = iface.getMaxBW()
+            self.recv += -spare_recv*time
+        else:
+            bw_data[2] += min(spare_recv,self.recv/time)
+            self.recv -= min(spare_recv*time,self.recv)
+        return bw_data
+
+
 
 print("Reading Interfaces:\n================================");
 ifaces = [ Interface(i) for i in cfg.INTERFACES ]
@@ -138,10 +163,10 @@ still_time = 0
 with  open(args.bwfile,'rt') as csvfile:
     simreader = csv.reader(csvfile, delimiter=',', quotechar="\"");
     #read a new line (first line)
-    last_row = next(simreader)
+    last_row = [ float(f) for f in next(simreader) ]
     next_step = float(cfg.INTERVAL)
     #and select the interface to use at this BW
-    iface = selectIface(float(last_row[1]),float(last_row[2])) or ifaces[0]
+    iface = selectIface(last_row[1],last_row[2]) or ifaces[0]
     line = 1
     while True:
         try:
@@ -151,50 +176,44 @@ with  open(args.bwfile,'rt') as csvfile:
         line += 1
         #number of steps to take before the next possible interface change
         #we always take at least one step, step = bandwidth log interval
-        steps = max(1,math.floor((float(row[0])-float(last_row[0]))/float(cfg.INTERVAL)))
+        steps = max(1,math.floor((float(row[0])-last_row[0])/float(cfg.INTERVAL)))
 
         #fast forward data and energy values ... no iface changes
-        target_time = float(last_row[0]) + steps*float(cfg.INTERVAL)
+        target_time = last_row[0] + steps*cfg.INTERVAL
         while True:
-            time = float(row[0]) - float(last_row[0])
+            time = float(row[0]) - last_row[0]
+            #Send buffered data from before
+            initial_last_row = last_row[:]
+            last_row = dbuffer.process(last_row,time,iface)
             #Can we squeeze in bytes that were too many?
-            if (dbuffer.send != 0 and float(last_row[1]) < iface.getMaxBW()):
-                send_add = min((iface.getMaxBW() - float(last_row[1]))*time,dbuffer.send)
-                dbuffer.send -= send_add
-                last_row[1] = float(last_row[1])+send_add/time
-            if (dbuffer.recv != 0 and float(last_row[2]) < iface.getMaxBW()):
-                recv_add = min((iface.getMaxBW() - float(last_row[2]))*time,dbuffer.recv)
-                dbuffer.recv -= recv_add
-                last_row[2] = float(last_row[2])+recv_add/time
 
             #calculate data sent/received
             #data in
-            data_total[0] += float(last_row[1])*time
+            data_total[0] += last_row[1]*time
             #data out
-            data_total[1] += float(last_row[2])*time
+            data_total[1] += last_row[2]*time
 
             #and the power used for this interface
-            cur_p = iface.getPower(float(last_row[1]),float(last_row[2]))
-            if not cur_p:
-                dbuffer.send += max(0,time*(float(row[1]) - iface.getMaxBW()))
-                dbuffer.recv += max(0,time*(float(row[2]) - iface.getMaxBW()))
-                cur_p = iface.getPower(min(iface.getMaxBW(),float(last_row[1])),min(iface.getMaxBW(),float(last_row[2])))
+            cur_p = iface.getPower(last_row[1],last_row[2])
+            #if not cur_p:
+            #    dbuffer.send += max(0,time*(float(row[1]) - iface.getMaxBW()))
+            #    dbuffer.recv += max(0,time*(float(row[2]) - iface.getMaxBW()))
+            #    cur_p = iface.getPower(min(iface.getMaxBW(),last_row[1]),min(iface.getMaxBW(),last_row[2]))
 
-            if dbuffer.send > 0 or dbuffer.recv > 0:
+            if dbuffer.isBuffering():
                 violations += 1
                 is_violating = 1
                 violation_time += time
             else:
                 is_violating = 0
-            cur_e = cur_p*time
             cur_iface_time += time
-
-            e_total += cur_e
+            e_total += cur_p*time
+            
             if still_iface != iface and still_time > 0:
                 e_total += still_iface.getPower(0,0)*time
                 cur_p += still_iface.getPower(0,0)
                 still_time -= time
-            e_worst += iface_worst.getPower(float(last_row[1]),float(last_row[2]))*time
+            e_worst += iface_worst.getPower(last_row[1],last_row[2])*time
             time_iface[iface.getIFace()] += time
             total_time += time
 
@@ -209,7 +228,7 @@ with  open(args.bwfile,'rt') as csvfile:
                 profile.write('%s,%s,%s,%s,%s\n' % ( last_row[0], last_row[1], last_row[2], cur_p,is_violating))
             if (steps != 1 or float(row[0]) >=  target_time):
                 break
-            last_row = row
+            last_row = [ float(f) for f in row ]
             try:
                 row = next(simreader)
             except:
@@ -224,14 +243,13 @@ with  open(args.bwfile,'rt') as csvfile:
         #either the best fit or the default
         if float(row[0]) >= next_step:
             old_iface = iface
-            iface = selectIface(float(last_row[2]),float(last_row[3])) or ifaces[0]
+            iface = selectIface(initial_last_row[1],initial_last_row[2]) or ifaces[0]
             if old_iface != iface:
                 still_time = old_iface.uplatency/1000.0
                 still_iface = old_iface
                 time_iface[old_iface.getIFace()] += old_iface.uplatency/1000.0
             next_step += float(cfg.INTERVAL)
-
-        last_row = row
+        last_row = [ float(f) for f in row ]
 
 print("DONE")
 print("Simulated Time (days): %s" % (total_time/3600/24))
