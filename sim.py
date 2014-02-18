@@ -58,39 +58,37 @@ class Interface:
         self.bwrange = eval('cfg.%s_RANGE' %(name))
         self.profile = eval('cfg.%s_PROFILE' %(name))
         self.rounded = eval('cfg.%s_ROUND' % (name))
-        start = 0
-        start_2 = 0
-        end = 0
+        cur_send = 0
+        #Check if profiles are contiguous and sane
         for k in sorted(self.profile.keys()):
-            if (int(k[0]) != start):
-                print("ERROR in send profile! Is not contignuous: %s vs. %s" % (str(k), start))
-            if k[1] > self.bw or k[1] < k[0]:
+            if int(k[0]) != cur_send:
+                print("ERROR in send profile! Is not contiguous: %s vs. %s" % (str(k), cur_send))
+            if not k[0] <= k[1] <= self.bw:
                 print("ERROR strange send range: %s" % str(k))
 
+            cur_recv = 0;
             for p in sorted(self.profile[k]):
-                if p[0] != start_2:
-                    print("ERROR in recv profile! Is not contignuous: %s" % str(p))
-                if p[1] > self.bw or p[1] < p[0]:
+                if p[0] != cur_recv:
+                    print("ERROR in recv profile! Is not contiguous: %s vs. %s" % str(p), cur_recv)
+                if not p[0] <= p[1] <= self.bw:
                     print("ERROR strange recv range: %s" % str(p))
-                start_2 = p[1]
-            start_2 = 0;
-            start = k[1];
+                cur_recv = p[1]
+            cur_send = k[1];
 
     def __str__(self):
-        return "iface: (%s) @ %s MBit/s\nLatency: %s ms\nUse in range: %s MBit/s - %s MBit/s\nProfile: %s\n" % (self.ifname,self.bw,self.uplatency,self.bwrange[0],self.bwrange[1],len(self.profile))
-
+        return ('''iface: {self.ifname} @ {self.bw} MBit/s\n'''
+                '''Latency: {self.uplatency} ms\n'''
+                '''Use in range: {self.bwrange[0]}  MBit/s - {self.bwrange[1]} MBit/s\n'''
+                '''Profile: {length}\n'''.format(self=self,length=len(self.profile)))
     def getPower(self,bw_up,bw_down):
         #nested lists
-        power = None
-        for p in sorted(self.profile.keys()):
-            if float(p[0]) <= bw_down < float(p[1]):
-                for q in sorted(self.profile[p]):
-                    if float(q[0]) <= bw_up < float(q[1]):
-                        power = float(q[2])
-                        break
+        for snd in sorted(self.profile.keys()):
+            if float(snd[0]) <= bw_down < float(snd[1]):
+                for recv in sorted(self.profile[snd]):
+                    if float(recv[0]) <= bw_up < float(recv[1]):
+                        return float(recv[2])
+
                 break
-        if power:
-            return power
         if max(bw_up,bw_down) <= self.bw:
             return self.rounded
         return None
