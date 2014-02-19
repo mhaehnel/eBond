@@ -28,29 +28,11 @@ args = parser.parse_args()
 cfg = imp.load_source('cfg',args.config)
 
 ifaces = []
-cur_iface = None
-cur_iface_time = 0
-
-def selectIface(bw_up,bw_down):
-    global ifaces,cur_iface,cur_iface_time
-    #Use predictor, go up fast
-    bw_up *= 1+cfg.PREDICTOR/100.0
-    bw_down *= 1+cfg.PREDICTOR/100.0
-    #Keep because of hysteresis?
-    bw_needed = max(bw_up,bw_down) #TODO: This assumes symmetric up/down
-    if cur_iface:
-        #Check for keep time and hysteresis
-        if bw_needed < max(cur_iface.bwrange) and (bw_needed > min(cur_iface.bwrange)*cfg.HYSTERESIS/100.0 or cur_iface_time < float(cfg.KEEPTIME)):
-            #Reset cooldown timer if we need this interface!
-            if bw_needed > min(cur_iface.bwrange):
-                cur_iface_time = 0
-            return cur_iface
-
-    cur_iface = min(ifaces,key=lambda x: x.getPower(bw_up,bw_down) or float("inf"))
-    cur_iface_time = 0
-    return cur_iface
 
 class Interface:
+    current = None
+    time = 0
+
     def __init__(self, name):
         self.ifname = name;
         self.bw = float(eval('cfg.%s_BW' % (name)))
@@ -58,8 +40,8 @@ class Interface:
         self.bwrange = eval('cfg.%s_RANGE' %(name))
         self.profile = eval('cfg.%s_PROFILE' %(name))
         self.rounded = eval('cfg.%s_ROUND' % (name))
-        cur_send = 0
         #Check if profiles are contiguous and sane
+        cur_send = 0
         for k in sorted(self.profile.keys()):
             if int(k[0]) != cur_send:
                 print("ERROR in send profile! Is not contiguous: %s vs. %s" % (str(k), cur_send))
@@ -74,12 +56,30 @@ class Interface:
                     print("ERROR strange recv range: %s" % str(p))
                 cur_recv = p[1]
             cur_send = k[1];
+    @staticmethod
+    def select(bw_up,bw_down):
+        #Use predictor, go up fast
+        bw_up *= 1+cfg.PREDICTOR/100.0
+        bw_down *= 1+cfg.PREDICTOR/100.0
+        #Keep because of hysteresis?
+        bw_needed = max(bw_up,bw_down) #TODO: This assumes symmetric up/down
+        if Interface.current:
+            #Check for keep time and hysteresis
+            if bw_needed < max(Interface.current.bwrange) and (bw_needed >= min(Interface.current.bwrange)*cfg.HYSTERESIS/100.0 or Interface.time < cfg.KEEPTIME):
+                #Reset cooldown timer if we need this interface!
+                if bw_needed > min(Interface.current.bwrange):
+                    Interface.time = 0
+                return Interface.current
+        Interface.time = 0
+        return min(ifaces,key=lambda x: x.getPower(bw_up,bw_down) or float("inf"))
+
 
     def __str__(self):
         return ('''iface: {self.ifname} @ {self.bw} MBit/s\n'''
                 '''Latency: {self.uplatency} ms\n'''
                 '''Use in range: {self.bwrange[0]}  MBit/s - {self.bwrange[1]} MBit/s\n'''
                 '''Profile: {length}\n'''.format(self=self,length=len(self.profile)))
+
     def getPower(self,bw_up,bw_down):
         #nested lists
         for snd in sorted(self.profile.keys()):
@@ -87,14 +87,13 @@ class Interface:
                 for recv in sorted(self.profile[snd]):
                     if float(recv[0]) <= bw_up < float(recv[1]):
                         return float(recv[2])
-
                 break
         if max(bw_up,bw_down) <= self.bw:
             return self.rounded
         return None
 
     def getMaxBW(self):
-        return float(self.bw)
+        return self.bw
 
     def getIFace(self):
         return self.ifname
@@ -148,9 +147,10 @@ violations = 0
 violation_time = 0
 
 dbuffer = DataBuffer()
-
 time_iface = { i.getIFace() : 0 for i in ifaces }
 
+#This is very simple and assumes that the last interface has the worst
+#energy characteristics! This might not be an appropriate assumption!
 iface_worst = ifaces[len(ifaces)-1]
 
 if args.outfile:
@@ -166,7 +166,7 @@ with  open(args.bwfile,'rt') as csvfile:
     last_row = [ float(f) for f in next(simreader) ]
     next_step = float(cfg.INTERVAL)
     #and select the interface to use at this BW
-    iface = selectIface(last_row[1],last_row[2]) or ifaces[0]
+    iface = Interface.select(last_row[1],last_row[2]) or ifaces[0]
     line = 1
     while True:
         try:
@@ -206,13 +206,13 @@ with  open(args.bwfile,'rt') as csvfile:
                 violation_time += time
             else:
                 is_violating = 0
-            cur_iface_time += time
-            e_total += cur_p*time
+            Interface.time += time
             
             if still_iface != iface and still_time > 0:
-                e_total += still_iface.getPower(0,0)*time
                 cur_p += still_iface.getPower(0,0)
                 still_time -= time
+
+            e_total += cur_p*time
             e_worst += iface_worst.getPower(last_row[1],last_row[2])*time
             time_iface[iface.getIFace()] += time
             total_time += time
@@ -243,7 +243,7 @@ with  open(args.bwfile,'rt') as csvfile:
         #either the best fit or the default
         if float(row[0]) >= next_step:
             old_iface = iface
-            iface = selectIface(initial_last_row[1],initial_last_row[2]) or ifaces[0]
+            iface = Interface.select(initial_last_row[1],initial_last_row[2]) or ifaces[0]
             if old_iface != iface:
                 still_time = old_iface.uplatency/1000.0
                 still_iface = old_iface
