@@ -24,14 +24,12 @@ parser.add_argument('-b','--bwfile',help='The network stats file is in csv forma
 parser.add_argument('-o','--outfile',help='The file that the profile should be written to. CSV Format: timestamp, bandwidth_in, bandwidth_out,power',required=False)
 args = parser.parse_args()
 
-
 cfg = imp.load_source('cfg',args.config)
-
-ifaces = []
 
 class Interface:
     current = None
     time = 0
+    ifaces = []
 
     def __init__(self, name):
         self.ifname = name;
@@ -56,6 +54,7 @@ class Interface:
                     print("ERROR strange recv range: %s" % str(p))
                 cur_recv = p[1]
             cur_send = k[1];
+
     @staticmethod
     def select(bw_up,bw_down):
         #Use predictor, go up fast
@@ -71,7 +70,7 @@ class Interface:
                     Interface.time = 0
                 return Interface.current
         Interface.time = 0
-        return min(ifaces,key=lambda x: x.getPower(bw_up,bw_down) or float("inf"))
+        return min(Interface.ifaces,key=lambda x: x.getPower(bw_up,bw_down) or float("inf"))
 
 
     def __str__(self):
@@ -103,7 +102,9 @@ class DataBuffer:
     def __init__(self):
         self.send = 0
         self.recv = 0
-    
+        self.violations = 0
+        self.violation_time = 0
+
     def isBuffering(self):
         return self.send > 0 or self.recv > 0
 
@@ -125,33 +126,33 @@ class DataBuffer:
         else:
             bw_data[2] += min(spare_recv,self.recv/time)
             self.recv -= min(spare_recv*time,self.recv)
+
+        if self.isBuffering():
+            self.violations += 1
+            self.violation_time += time
         return bw_data
 
-
-
 print("Reading Interfaces:\n================================");
-ifaces = [ Interface(i) for i in cfg.INTERFACES ]
-for i in ifaces:
+Interface.ifaces = [ Interface(i) for i in cfg.INTERFACES ]
+for i in Interface.ifaces:
     print(i)
 print("===== DONE =====\n");
 print("ebond timestep = %s s" % (cfg.INTERVAL))
 print("Hysteresis = %s %% of max BW " % (cfg.HYSTERESIS))
-
 print(args.bwfile)
 
 total_time = 0
 e_total = 0
 e_worst = 0
 data_total = [0,0]
-violations = 0
 violation_time = 0
 
 dbuffer = DataBuffer()
-time_iface = { i.getIFace() : 0 for i in ifaces }
+time_iface = { i.getIFace() : 0 for i in Interface.ifaces }
 
 #This is very simple and assumes that the last interface has the worst
 #energy characteristics! This might not be an appropriate assumption!
-iface_worst = ifaces[len(ifaces)-1]
+iface_worst = Interface.ifaces[len(Interface.ifaces)-1]
 
 if args.outfile:
     profile = open(args.outfile,'w')
@@ -159,14 +160,14 @@ if args.outfile:
 still_iface = False
 still_time = 0
 
-
+#Simulation loop 
 with  open(args.bwfile,'rt') as csvfile:
     simreader = csv.reader(csvfile, delimiter=',', quotechar="\"");
     #read a new line (first line)
     last_row = [ float(f) for f in next(simreader) ]
     next_step = float(cfg.INTERVAL)
     #and select the interface to use at this BW
-    iface = Interface.select(last_row[1],last_row[2]) or ifaces[0]
+    Interface.current = Interface.select(last_row[1],last_row[2]) or Interface.ifaces[0]
     line = 1
     while True:
         try:
@@ -182,50 +183,38 @@ with  open(args.bwfile,'rt') as csvfile:
         target_time = last_row[0] + steps*cfg.INTERVAL
         while True:
             time = float(row[0]) - last_row[0]
+            e_worst += iface_worst.getPower(last_row[1],last_row[2])*time
             #Send buffered data from before
             initial_last_row = last_row[:]
-            last_row = dbuffer.process(last_row,time,iface)
-            #Can we squeeze in bytes that were too many?
+            #Check if some data goes in/out of the buffer due to over/underload
+            last_row = dbuffer.process(last_row,time,Interface.current)
 
             #calculate data sent/received
-            #data in
             data_total[0] += last_row[1]*time
-            #data out
             data_total[1] += last_row[2]*time
 
             #and the power used for this interface
-            cur_p = iface.getPower(last_row[1],last_row[2])
-            #if not cur_p:
-            #    dbuffer.send += max(0,time*(float(row[1]) - iface.getMaxBW()))
-            #    dbuffer.recv += max(0,time*(float(row[2]) - iface.getMaxBW()))
-            #    cur_p = iface.getPower(min(iface.getMaxBW(),last_row[1]),min(iface.getMaxBW(),last_row[2]))
+            cur_p = Interface.current.getPower(last_row[1],last_row[2])
 
-            if dbuffer.isBuffering():
-                violations += 1
-                is_violating = 1
-                violation_time += time
-            else:
-                is_violating = 0
             Interface.time += time
             
-            if still_iface != iface and still_time > 0:
+            if still_iface != Interface.current and still_time > 0:
                 cur_p += still_iface.getPower(0,0)
                 still_time -= time
 
             e_total += cur_p*time
-            e_worst += iface_worst.getPower(last_row[1],last_row[2])*time
-            time_iface[iface.getIFace()] += time
+            time_iface[Interface.current.getIFace()] += time
             total_time += time
 
             if line%100 == 0:
-                if iface.getIFace() == 'eth1':
+                if Interface.current.getIFace() == 'eth1':
                     sys.stdout.write(".")
                 else:
                     sys.stdout.write("|")
                 sys.stdout.flush()
 
             if args.outfile:
-                profile.write('%s,%s,%s,%s,%s\n' % ( last_row[0], last_row[1], last_row[2], cur_p,is_violating))
+                profile.write('%s,%s,%s,%s,%s\n' % ( last_row[0], last_row[1], last_row[2], cur_p,bufferdbuffer.isBuffering()))
             if (steps != 1 or float(row[0]) >=  target_time):
                 break
             last_row = [ float(f) for f in row ]
@@ -235,16 +224,14 @@ with  open(args.bwfile,'rt') as csvfile:
                 break
             line += 1
 
-
-        #the time spent in this interface
-
         #only step if we are on the next interval. If we are
         #select iface for this step
         #either the best fit or the default
         if float(row[0]) >= next_step:
-            old_iface = iface
-            iface = Interface.select(initial_last_row[1],initial_last_row[2]) or ifaces[0]
-            if old_iface != iface:
+            old_iface = Interface.current
+            Interface.current = Interface.select(initial_last_row[1],initial_last_row[2]) or Interface.ifaces[0]
+            #WOAH! There is still some bug in how this is handled! Fix it! TODO
+            if old_iface != Interface.current:
                 still_time = old_iface.uplatency/1000.0
                 still_iface = old_iface
                 time_iface[old_iface.getIFace()] += old_iface.uplatency/1000.0
@@ -258,7 +245,8 @@ print("Consumed Power: %s Wh (vs %s Wh)" %( str(e_total/3600),str(e_worst/3600))
 print("Interface up share: ")
 for key,value in time_iface.items():
     print("%s => %s %%" % (key, value*100/total_time))
-print("Number of service vialoations due to late power up: %s (%s seconds or %s %% of time)" %(violations,violation_time,violation_time*100/total_time))
+print("Number of service vialoations due to late power up: %s (%s seconds or %s %% of time)"
+%(dbuffer.violations,dbuffer.violation_time,violation_time*100/total_time))
 print("Remaining bytes to transfer: %s / %s" %(dbuffer.send,dbuffer.recv))
 print("Transfered GByte: %s / %s / %s " % (data_total[0]/1024/8,data_total[1]/1024/8,(data_total[1]+data_total[0])/1024/8))
 print("Average Speed MByte/s: %s / %s / %s" % (data_total[0]/8/total_time,data_total[1]/8/total_time,(data_total[1]+data_total[0])/8/total_time))
