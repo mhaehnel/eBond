@@ -214,7 +214,7 @@ with  open(args.bwfile,'rt') as csvfile:
                 sys.stdout.flush()
 
             if args.outfile:
-                profile.write('%s,%s,%s,%s,%s\n' % ( last_row[0], last_row[1], last_row[2], cur_p,bufferdbuffer.isBuffering()))
+                profile.write('%s,%s,%s,%s,%s\n' % ( last_row[0], last_row[1], last_row[2], cur_p,dbuffer.isBuffering()))
             if (steps != 1 or float(row[0]) >=  target_time):
                 break
             last_row = [ float(f) for f in row ]
